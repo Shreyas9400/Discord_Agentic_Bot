@@ -219,12 +219,21 @@ class SearXNGClient:
             await asyncio.sleep(random.uniform(0.1, 0.5))
             scrape_tasks.append(self.scrape_url(url))
             
-        scraped_results = await asyncio.gather(*scrape_tasks)
+        # Use gather with return_exceptions=True to prevent one failure from stopping all scrapes
+        scraped_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
         
         # Add scraped content to search results
         for i, scrape_result in enumerate(scraped_results):
             if i < len(search_results.get("organic", [])):
-                search_results["organic"][i]["scraped_content"] = scrape_result
+                # Handle the case where gather returned an exception instead of a result
+                if isinstance(scrape_result, Exception):
+                    search_results["organic"][i]["scraped_content"] = {
+                        "url": search_results["organic"][i]["link"],
+                        "error": str(scrape_result),
+                        "success": False
+                    }
+                else:
+                    search_results["organic"][i]["scraped_content"] = scrape_result
         
         return search_results
 
@@ -253,11 +262,18 @@ async def test_searxng_client():
             # If search succeeded, also scrape the content
             urls_to_scrape = [result["link"] for result in results.get("organic", [])]
             scrape_tasks = [client.scrape_url(url) for url in urls_to_scrape]
-            scraped_results = await asyncio.gather(*scrape_tasks)
+            scraped_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
             
             for i, scrape_result in enumerate(scraped_results):
                 if i < len(results.get("organic", [])):
-                    results["organic"][i]["scraped_content"] = scrape_result
+                    if isinstance(scrape_result, Exception):
+                        results["organic"][i]["scraped_content"] = {
+                            "url": results["organic"][i]["link"],
+                            "error": str(scrape_result),
+                            "success": False
+                        }
+                    else:
+                        results["organic"][i]["scraped_content"] = scrape_result
         
         if "error" in results:
             logger.error(f"Search error: {results['error']}")

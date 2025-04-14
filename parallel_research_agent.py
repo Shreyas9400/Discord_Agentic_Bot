@@ -3,9 +3,11 @@ from google.adk.agents.llm_agent import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
+from google.adk.tools import FunctionTool
 import json
 from datetime import datetime
 import asyncio
+import re
 from searxng_client import SearXNGClient
 
 APP_NAME = "parallel_research_app"
@@ -16,8 +18,8 @@ GEMINI_MODEL = "gemini-2.0-flash-exp"
 # Create SearXNG client instance
 searxng_client = SearXNGClient(searxng_instance="http://localhost:8888", verify_ssl=False)
 
-# Create a SearXNG search tool as an async function that can be called by agents
-async def searxng_search(query):
+# Create a synchronous wrapper for the search function to avoid issues with ADK parsing
+def searxng_search(query):
     """
     Search the web using SearXNG.
     
@@ -28,11 +30,40 @@ async def searxng_search(query):
         A dictionary containing search results
     """
     try:
-        # Search and scrape results using SearXNG
-        results = await searxng_client.search_and_scrape(query, max_results=5)
-        return results
+        # Use asyncio.run to call the async function from a synchronous context
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're already in an async context, create a new task
+            future = asyncio.run_coroutine_threadsafe(
+                searxng_client.search_and_scrape(query, max_results=5),
+                loop
+            )
+            return future.result()
+        else:
+            # Otherwise use asyncio.run
+            return asyncio.run(searxng_client.search_and_scrape(query, max_results=5))
     except Exception as e:
+        print(f"Search error: {str(e)}")
         return {"error": str(e), "query": query}
+
+# Manually create the function tool with a simple declaration
+search_tool = FunctionTool(
+    function=searxng_search,
+    declaration={
+        "name": "searxng_search",
+        "description": "Search the web using SearXNG",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query string"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+)
 
 # Agent 1: Query Generation Agent
 query_generation_agent = LlmAgent(
@@ -99,7 +130,7 @@ def create_search_agent(query, index):
         Focus on extracting factual information most relevant to the research goal.
         """,
         description=f"Searches and processes results for: {query}",
-        tools=[searxng_search]  # Use SearXNG search instead of Google Search
+        tools=[search_tool]  # Use the manually created search tool
     )
 
 # Agent 3: Report Generator Agent
@@ -228,20 +259,35 @@ Please conduct research based on this goal, taking into account any relevant con
     # Extract generated queries from response
     queries = []
     try:
-        # Try to find JSON in the response
-        import re
-        json_match = re.search(r'({[\s\S]*})', query_generation_response)
+        # Try to find JSON in the response - more robust pattern matching
+        json_match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', query_generation_response)
         if json_match:
-            query_result = json.loads(json_match.group(1))
-            queries = query_result.get("queries", [])
+            # Use the first non-None group
+            json_str = next(group for group in json_match.groups() if group is not None)
             
-            # Store research goals for each query
-            for query_item in queries:
-                if isinstance(query_item, dict) and "query" in query_item and "researchGoal" in query_item:
-                    query_research_goals[query_item["query"]] = query_item["researchGoal"]
+            # Try to parse the JSON
+            try:
+                query_result = json.loads(json_str)
+                if "queries" in query_result and isinstance(query_result["queries"], list):
+                    queries = query_result["queries"]
+                    
+                    # Store research goals for each query
+                    for query_item in queries:
+                        if isinstance(query_item, dict) and "query" in query_item and "researchGoal" in query_item:
+                            query_research_goals[query_item["query"]] = query_item["researchGoal"]
+                else:
+                    print("JSON found but 'queries' key missing or not a list")
+            except json.JSONDecodeError as e:
+                print(f"Invalid JSON found: {e}")
+                print(f"JSON string: {json_str[:100]}...")
+        else:
+            print("No JSON pattern found in response")
     except Exception as e:
         print(f"Error extracting queries: {e}")
-        # Fallback - create some default queries
+    
+    # Fallback if no queries were extracted
+    if not queries:
+        print("Using fallback queries")
         queries = [
             {"query": f"{research_goal} overview"},
             {"query": f"{research_goal} analysis"},
@@ -286,33 +332,51 @@ Please conduct research based on this goal, taking into account any relevant con
                 search_result_text = event.content.parts[0].text
                 print(f"Search Agent {i} Response:", search_result_text[:100] + "..." if len(search_result_text) > 100 else search_result_text)
         
-        # Extract learnings from the search response
-        try:
-            # Try to find JSON in the response
-            import re
-            json_match = re.search(r'({[\s\S]*})', search_result_text)
-            if json_match:
-                search_result = json.loads(json_match.group(1))
-                if "learnings" in search_result:
-                    # Store the learnings by query for better organization
-                    search_results_by_query[query] = search_result["learnings"]
-                    all_learnings.extend(search_result["learnings"])
-            else:
-                # If no JSON found, extract text as is
-                learning = f"From search '{query}': {search_result_text[:200]}..."
-                search_results_by_query[query] = [learning]
-                all_learnings.append(learning)
-        except Exception as e:
-            print(f"Error extracting learnings from search {i}: {e}")
-            # Add the raw text as a fallback
-            if search_result_text:
-                learning = f"From search '{query}': {search_result_text[:200]}..."
-                search_results_by_query[query] = [learning]
-                all_learnings.append(learning)
+        # Extract learnings from the search response with more robust handling
+        if search_result_text:
+            try:
+                # Try to find JSON in the response
+                json_match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', search_result_text)
+                if json_match:
+                    # Use the first non-None group
+                    json_str = next(group for group in json_match.groups() if group is not None)
+                    
+                    try:
+                        search_result = json.loads(json_str)
+                        if "learnings" in search_result and isinstance(search_result["learnings"], list):
+                            # Store the learnings by query for better organization
+                            search_results_by_query[query] = search_result["learnings"]
+                            all_learnings.extend(search_result["learnings"])
+                        else:
+                            # Create a default learning if none found
+                            learning = f"From search '{query}': Found information but no structured learnings."
+                            search_results_by_query[query] = [learning]
+                            all_learnings.append(learning)
+                    except json.JSONDecodeError as e:
+                        print(f"Invalid JSON in search result: {e}")
+                        # Use text as backup
+                        learning = f"From search '{query}': {search_result_text[:300]}..."
+                        search_results_by_query[query] = [learning]
+                        all_learnings.append(learning)
+                else:
+                    # If no JSON found, extract text as is
+                    learning = f"From search '{query}': {search_result_text[:300]}..."
+                    search_results_by_query[query] = [learning]
+                    all_learnings.append(learning)
+            except Exception as e:
+                print(f"Error extracting learnings from search {i}: {e}")
+                # Add the raw text as a fallback
+                if search_result_text:
+                    learning = f"From search '{query}': {search_result_text[:300]}..."
+                    search_results_by_query[query] = [learning]
+                    all_learnings.append(learning)
+        else:
+            print(f"No result text for search {i}")
+            learning = f"From search '{query}': No results obtained."
+            search_results_by_query[query] = [learning]
+            all_learnings.append(learning)
     
     # Step 3: Generate final report
-    # Prepare a message with all the accumulated learnings in an organized fashion
-    
     # Build a structured report input with organized learnings by topic/query
     report_input = f"""
 # Research Report Input: {research_goal}
