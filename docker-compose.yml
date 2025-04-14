@@ -1,0 +1,36 @@
+version: "3.9"
+services:
+  discord-bot:
+    build: .
+    ports:
+      - "8000:8000" # Or any other port you want to expose for debugging/monitoring
+    volumes:
+      - .:/app # Mount the current directory to the /app directory inside the container
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'from qdrant_client import QdrantClient; client = QdrantClient(host=\"qdrant\", port=6333); client.get_collection(collection_name=\"mem0_default\")' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'from qdrant_client import QdrantClient; client = QdrantClient(host=\"localhost\", port=6333); client.get_collection(collection_name=\"mem0_default\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  qdrant_storage:

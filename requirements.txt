@@ -4,3 +4,4 @@ google-generativeai
 google-cloud-aiplatform # Might be needed for ADK, included for safety
 mem0ai
 qdrant-client
+google-adk

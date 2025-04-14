@@ -32,21 +32,7 @@ This Discord bot leverages multiple AI agents (Knowledge Base, Web Search, Resea
     cd <repository-directory>
     ```
 
-2.  **Create a virtual environment (recommended):**
-    ```bash
-    python -m venv venv
-    # On Windows
-    .\venv\Scripts\activate
-    # On macOS/Linux
-    source venv/bin/activate
-    ```
-
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **Configure environment variables:**
+2.  **Configure environment variables:**
     *   Create a file named `.env` in the project root.
     *   Add your Discord token and Google API key:
         ```env
@@ -54,13 +40,41 @@ This Discord bot leverages multiple AI agents (Knowledge Base, Web Search, Resea
         GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY_HERE
         ```
 
-5.  **Ensure Qdrant is running:**
-    *   Start your local Qdrant instance if it's not already running (see Prerequisites). The bot expects it to be available at `localhost:6333`.
+3.  **Run the bot using Docker Compose (Recommended):**
+    *   Make sure you have Docker and Docker Compose installed.
+    *   From the project root, run:
+        ```bash
+        docker-compose up --build
+        ```
+    *   This will build the Docker image, start the bot, and also start a Qdrant instance, ensuring Qdrant is healthy before starting the bot. The Docker Compose file includes healthchecks to ensure both the bot and Qdrant are running correctly, using the `qdrant_client` library to verify their status.
 
-6.  **Run the bot:**
-    ```bash
-    python discord_bot.py
-    ```
+**Troubleshooting Docker:**
+
+If you encounter the error "Bind for 0.0.0.0:6333 failed: port is already allocated", it means that another application is already using port 6333, which Qdrant needs. To resolve this:
+
+1.  **Stop the Existing Process:** Identify and stop the process that is using port 6333.
+2.  **Change the Port Mapping:** Modify the `docker-compose.yml` file to use a different port for Qdrant (e.g., `6334:6333`).
+3.  **Remove Existing Container:** Run `docker-compose down` to stop and remove all containers, then try `docker-compose up --build` again.
+
+4.  **Alternative: Manual Setup (for development or if you don't want to use Docker):**
+    *   Create a virtual environment (recommended):
+        ```bash
+        python -m venv venv
+        # On Windows
+        .\venv\Scripts\activate
+        # On macOS/Linux
+        source venv/bin/activate
+        ```
+    *   Install dependencies:
+        ```bash
+        pip install -r requirements.txt
+        ```
+    *   Ensure Qdrant is running:
+        *   Start your local Qdrant instance if it's not already running (see Prerequisites). The bot expects it to be available at `localhost:6333`.
+    *   Run the bot:
+        ```bash
+        python discord_bot.py
+        ```
 
 ## Usage
 
