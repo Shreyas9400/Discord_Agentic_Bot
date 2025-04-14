@@ -2,17 +2,37 @@ from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
-from google.adk.tools import google_search
 from google.genai import types
 import json
 from datetime import datetime
+import asyncio
+from searxng_client import SearXNGClient
 
 APP_NAME = "parallel_research_app"
 USER_ID = "research_user_01"
 SESSION_ID = "parallel_research_session"
 GEMINI_MODEL = "gemini-2.0-flash-exp"
 
-# --- Define New Research Agents ---
+# Create SearXNG client instance
+searxng_client = SearXNGClient(searxng_instance="http://localhost:8888", verify_ssl=False)
+
+# Create a SearXNG search tool as an async function that can be called by agents
+async def searxng_search(query):
+    """
+    Search the web using SearXNG.
+    
+    Args:
+        query: The search query string
+        
+    Returns:
+        A dictionary containing search results
+    """
+    try:
+        # Search and scrape results using SearXNG
+        results = await searxng_client.search_and_scrape(query, max_results=5)
+        return results
+    except Exception as e:
+        return {"error": str(e), "query": query}
 
 # Agent 1: Query Generation Agent
 query_generation_agent = LlmAgent(
@@ -55,9 +75,10 @@ def create_search_agent(query, index):
         Search Query: "{query}"
         
         Your task is to:
-        1. Use the Google Search tool to search for the assigned query
-        2. Process the results to extract valuable information
-        3. Organize the learnings in a structured way
+        1. Use the SearXNG Search tool to search for the assigned query
+        2. Process the search results, including the scraped content from each page
+        3. Extract valuable information from the search results
+        4. Organize the learnings in a structured way
         
         Output a JSON object with the following structure:
         {{
@@ -78,7 +99,7 @@ def create_search_agent(query, index):
         Focus on extracting factual information most relevant to the research goal.
         """,
         description=f"Searches and processes results for: {query}",
-        tools=[google_search]
+        tools=[searxng_search]  # Use SearXNG search instead of Google Search
     )
 
 # Agent 3: Report Generator Agent
@@ -144,13 +165,16 @@ report_generator_agent = LlmAgent(
 )
 
 # --- Main execution function ---
-def run_parallel_research(research_goal, context=""):
+async def run_parallel_research(research_goal, context=""):
     """
     Main function to execute the parallel research process
     
     Args:
         research_goal: The research question or goal
         context: Optional conversation context to include
+    
+    Returns:
+        Comprehensive research report
     """
     session_service = InMemorySessionService()
     session = session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
@@ -370,9 +394,14 @@ Balance factual reporting with insightful analysis and provide a nuanced perspec
     
     return final_report
 
-# Example usage
+# Example usage - updated to handle async
 if __name__ == "__main__":
-    research_goal = "Impact of tariffs on China led by Trump, also explain about the current tariff rates"
-    final_report = run_parallel_research(research_goal)
-    print("\nFINAL RESEARCH REPORT:")
-    print(final_report)
+    import asyncio
+    
+    async def main():
+        research_goal = "Impact of tariffs on China led by Trump, also explain about the current tariff rates"
+        final_report = await run_parallel_research(research_goal)
+        print("\nFINAL RESEARCH REPORT:")
+        print(final_report)
+    
+    asyncio.run(main())

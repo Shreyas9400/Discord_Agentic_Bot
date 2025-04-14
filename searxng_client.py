@@ -139,15 +139,6 @@ class SearXNGClient:
         }
     
     async def scrape_url(self, url: str) -> Dict[str, str]:
-        """
-        Scrape content from a URL using newspaper.
-        
-        Args:
-            url: URL to scrape
-            
-        Returns:
-            Dictionary containing the scraped content
-        """
         try:
             logger.info(f"Scraping URL: {url}")
             
@@ -156,9 +147,18 @@ class SearXNGClient:
             if not self.verify_ssl:
                 config = {'verify': False}
             
-            article = Article(url, config=config)
-            await asyncio.to_thread(article.download)
-            await asyncio.to_thread(article.parse)
+            article = Article(url)
+            
+            # Use more robust error handling during download and parse
+            try:
+                await asyncio.to_thread(article.download)
+                await asyncio.to_thread(article.parse)
+            except Exception as e:
+                return {
+                    "url": url,
+                    "error": f"Article processing error: {str(e)}",
+                    "success": False
+                }
             
             return {
                 "url": url,
