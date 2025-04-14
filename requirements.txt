@@ -1,7 +1,17 @@
-discord.py
-python-dotenv
-google-generativeai
-google-cloud-aiplatform # Might be needed for ADK, included for safety
-mem0ai
-qdrant-client
-google-adk
+# Discord
+discord.py==2.3.1
+
+# Google SDK - use the latest available version
+google-adk==0.1.1
+google-generativeai==0.4.0
+
+# Database
+qdrant-client==1.4.0
+
+# Web scraping and search
+aiohttp==3.9.1
+newspaper3k==0.2.8
+nltk==3.8.1
+
+# Utility libraries
+python-dotenv==1.0.0

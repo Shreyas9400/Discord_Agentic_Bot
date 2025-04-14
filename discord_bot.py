@@ -42,7 +42,7 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)  # Di
 # Mem0 Memory Setup
 def ensure_qdrant_collection(collection_name="mem0_default", vector_size=768):
     """Ensures a Qdrant collection exists with the correct vector dimensions."""
-    client = QdrantClient(host="localhost", port=6333)
+    client = QdrantClient(host="qdrant", port=6333)
     
     # Check if collection exists
     try:
@@ -81,7 +81,7 @@ def initialize_mem0():
             "vector_store": {
                 "provider": "qdrant",
                 "config": {
-                    "host": "localhost",
+                    "host": "qdrant",  # Make sure this matches the service name
                     "port": 6333,
                     "collection_name": "mem0_default"
                 }
@@ -112,7 +112,7 @@ def initialize_mem0():
         traceback.print_exc()
         logger.error(f"Error initializing Mem0: {e}")
         return None
-
+    
 # Global memory instance
 mem0_instance = None
 

@@ -1,22 +1,32 @@
 from google.adk.agents import Agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
-from google.adk.tools import google_search
 from google.genai import types
 from shared_utils import get_conversation_context
 from datetime import datetime
+import asyncio
+import json
+from searxng_client import SearXNGClient
 
 class WebSearchAgent:
     """
-    Agent that performs web searches
+    Agent that performs web searches using SearXNG
     """
-    def __init__(self):
-        """Initialize the web search agent"""
+    def __init__(self, searxng_instance="https://searx.be"):
+        """
+        Initialize the web search agent
+        
+        Args:
+            searxng_instance: URL of the SearXNG instance to use
+        """
         self.APP_NAME = "web_search_agent"
         self.USER_ID = "discord_user"
         self.SESSION_ID = "discord_session"
         
-        # Create the agent with Google Search capability
+        # Create SearXNG client
+        self.searxng_client = SearXNGClient(searxng_instance)
+        
+        # Create the agent
         self.agent = Agent(
             name="web_search_agent",
             model="gemini-2.0-flash",
@@ -24,11 +34,12 @@ class WebSearchAgent:
             instruction="""You are a helpful Web Search Assistant.
             
             When the user asks a question:
-            1. Use Google Search to find relevant information
-            2. Synthesize the information into a clear, concise answer
-            3. Cite your sources when providing information
-            4. If search results are insufficient, explain what you know and what you don't know
-            5. Consider any conversation context provided when formulating your response
+            1. Use SearXNG Search to find relevant information
+            2. Read the scraped content from each result to get detailed information
+            3. Synthesize the information into a clear, concise answer
+            4. Cite your sources when providing information
+            5. If search results are insufficient, explain what you know and what you don't know
+            6. Consider any conversation context provided when formulating your response
             
             Provide factual answers based on search results rather than assumptions.
             """
@@ -64,7 +75,13 @@ class WebSearchAgent:
         if user_id:
             context = await get_conversation_context(query, user_id, message_history)
         
-        # Create prompt with context and query
+        # Perform SearXNG search and scrape results
+        search_results = await self.searxng_client.search_and_scrape(query)
+        
+        # Format search results for the agent
+        results_str = json.dumps(search_results, indent=2)
+        
+        # Create prompt with context, query, and search results
         prompt = f"""
 {context}
 
@@ -73,7 +90,11 @@ Current time: {datetime.now().strftime('%H:%M:%S')}
 
 User search query: {query}
 
-Please search the web and provide information, taking into account any relevant context.
+Search results from SearXNG:
+{results_str}
+
+Please analyze these search results, including the scraped content, and provide a comprehensive answer to the user's query.
+Take into account any relevant context.
 """
         
         content = types.Content(role='user', parts=[types.Part(text=prompt)])
@@ -103,9 +124,13 @@ Please search the web and provide information, taking into account any relevant 
 
         return final_response
 
+
 # Example usage 
 if __name__ == "__main__":
     # Test the web search agent
-    search_agent = WebSearchAgent()
-    result = search_agent.search("What are the latest developments in quantum computing?")
-    print(result)
+    async def test_agent():
+        search_agent = WebSearchAgent()
+        result = await search_agent.search("What are the latest developments in quantum computing?")
+        print(result)
+        
+    asyncio.run(test_agent())

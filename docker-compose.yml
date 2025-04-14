@@ -12,12 +12,16 @@ services:
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Point to your external SearXNG instance - adjust the URL as needed
+      - SEARXNG_URL=http://host.docker.internal:8888
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "python -c 'from qdrant_client import QdrantClient; client = QdrantClient(host=\"qdrant\", port=6333); client.get_collection(collection_name=\"mem0_default\")' || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 5
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Makes host machine accessible from inside container
 
   qdrant:
     image: qdrant/qdrant
