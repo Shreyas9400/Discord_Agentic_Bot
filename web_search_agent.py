@@ -12,7 +12,7 @@ class WebSearchAgent:
     """
     Agent that performs web searches using SearXNG
     """
-    def __init__(self, searxng_instance="https://searx.be"):
+    def __init__(self, searxng_instance="http://localhost:8888"):
         """
         Initialize the web search agent
         
