@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "8080:8080"
+    environment:
+      - BASE_URL=http://searxng:8080
+    volumes:
+      - /c/Python/Mem0/Discord Bot Parallel Researcher - Backup - Modified for Searxng - Parallel Researcher/settings.yml:/etc/searxng/settings.yml
+    networks:
+      - researchnet
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    networks:
+      - researchnet
+
+  app:
+    build: .
+    container_name: research-bot
+    env_file:
+      - .env
+    depends_on:
+      - searxng
+      - qdrant
+    networks:
+      - researchnet
+    # Uncomment if you want to see logs interactively
+    # tty: true
+
+networks:
+  researchnet:
+    driver: bridge
