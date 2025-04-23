@@ -623,52 +623,6 @@ Rephrased web search query:"""
     except Exception as e:
         await ctx.send(f"An error occurred during web search: {str(e)}")
 
-@bot.command(name='force_research')
-async def force_research(ctx, *, research_goal):
-    """
-    Force the bot to use the research agent
-    Usage: !force_research [research goal]
-    """
-    await ctx.send(f"Starting research on: {research_goal}\nThis may take a few minutes...")
-    
-    try:
-        # Format user ID for Mem0
-        discord_user_id = f"discord_{ctx.author.id}"
-        
-        # Initialize or get message history for this user
-        if discord_user_id not in user_message_history:
-            user_message_history[discord_user_id] = []
-        
-        # Add current query to history
-        user_message_history[discord_user_id].append({
-            "role": "user",
-            "content": f"[Research] {research_goal}"
-        })
-        
-        # Get context for research
-        context = await get_conversation_context(research_goal, discord_user_id, user_message_history[discord_user_id])
-        
-        # Pass context to research function
-        final_report = await run_parallel_research(research_goal, context)
-        await send_chunked_message(ctx, final_report)
-        
-        # Add response to history (shortened version)
-        user_message_history[discord_user_id].append({
-            "role": "assistant",
-            "content": "I've completed a comprehensive research report for you. Here's a summary: " + final_report[:200] + "..."
-        })
-        
-        # Store this interaction in memory
-        if mem0_instance:
-            messages = [
-                {"role": "user", "content": f"[Research request] {research_goal}"},
-                {"role": "assistant", "content": "I've completed a comprehensive research report for you. Here's a summary: " + final_report[:200] + "..."}
-            ]
-            await asyncio.to_thread(mem0_instance.add, messages, user_id=discord_user_id)
-    
-    except Exception as e:
-        await ctx.send(f"An error occurred during research: {str(e)}")
-
 @bot.command(name='force_knowledge')
 async def force_knowledge(ctx, *, query):
     """
@@ -935,6 +889,38 @@ The bot remembers your conversation history for more natural interactions:
 - Long-term memory: Important information from past conversations
 """
     await ctx.send(help_text)
+
+@bot.command(name='deepresearch')
+async def deepresearch(ctx, *, query):
+    """
+    Run a deep research agent and return a detailed report.
+    Usage: !deepresearch [your research topic]
+    """
+    progress_msg = await ctx.send("Progress: Starting...")
+
+    async def on_progress(progress):
+        msg = (
+            f"Progress:\n"
+            f"Depth: {progress['currentDepth']}/{progress['totalDepth']} | "
+            f"Breadth: {progress['currentBreadth']}/{progress['totalBreadth']} | "
+            f"Queries: {progress['completedQueries']}/{progress['totalQueries']}\n"
+            f"Current: {progress.get('currentQuery','')[:100]}"
+        )
+        await progress_msg.edit(content=msg)
+
+    try:
+        report = await run_parallel_research(query, on_progress=on_progress)
+        await send_chunked_message(ctx, report)
+    except Exception as e:
+        await ctx.send(f"An error occurred during deep research: {str(e)}")
+
+async def ask_followup_questions(ctx, query, num_questions=2):
+    # Use your LLM to generate follow-up questions (like generateFeedback)
+    prompt = f"Given the following query, ask up to {num_questions} follow-up questions to clarify the research direction:\n{query}"
+    # Use your LLM agent to get questions (implement similar to KnowledgeBaseAgent)
+    # For each question, send to user and await reply
+    # Return list of answers
+    # ...implementation...
 
 # Run the bot
 def main():

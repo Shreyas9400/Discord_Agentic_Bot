@@ -1,523 +1,273 @@
-from google.adk.agents.parallel_agent import ParallelAgent
+import asyncio
+import json
+import re
+import uuid
+from datetime import datetime
+
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
-from google.adk.tools import FunctionTool
-import json
-from datetime import datetime
-import asyncio
-import re
+
 from searxng_client import SearXNGClient
 
+GEMINI_MODEL = "gemini-2.0-flash-exp"
 APP_NAME = "parallel_research_app"
 USER_ID = "research_user_01"
-SESSION_ID = "parallel_research_session"
-GEMINI_MODEL = "gemini-2.0-flash-exp"
 
-# Create SearXNG client instance
 searxng_client = SearXNGClient(searxng_instance="http://searxng:8080", verify_ssl=False)
 
-def create_query_generation_agent():
+def make_query_agent():
     return LlmAgent(
-        name="QueryGenerationAgent",
+        name=f"QueryGen_{uuid.uuid4().hex[:8]}",
         model=GEMINI_MODEL,
-        instruction="""You are an AI Query Generation Assistant.
-
-        Your task is to decide WHAT to search for next based on the current research goal.
-        Generate a list of specific Search Engine Results Page (SERP) queries.
-
-        For each query, define a researchGoal that outlines what you expect to find and potential next steps.
-
-        Output a JSON object with the following structure:
-        {
-        "queries": [
-            {
-                "query": "specific search term 1",
-                "researchGoal": "what I expect to find with this query and how it relates to the overall research"
-            },
-            {
-                "query": "specific search term 2",
-                "researchGoal": "what I expect to find with this query and how it relates to the overall research"
-            }
-        ]
-        }
-
-        Adapt your queries based on any accumulated knowledge from previous searches.
-        """,
-        description="Generates search queries based on research goals and previous learnings."
+        instruction="""
+You are an advanced research analyst. Your job is to break down the user's research goal into 1-2 highly analytical, multi-perspective web search queries.
+- Each query should target a different angle, stakeholder, or aspect of the topic (e.g., economic, political, social, technological, historical, etc).
+- Avoid redundancy and ensure coverage of both factual and analytical dimensions.
+Return a JSON object:
+{"queries": ["query1", "query2"]}
+""",
+        description="Generates analytical, multi-perspective search queries."
     )
 
-def create_report_generator_agent():
-    return LlmAgent(
-        name="ReportGeneratorAgent",
-        model=GEMINI_MODEL,
-        instruction="""You are an AI Report Generation Assistant tasked with creating an in-depth, comprehensive research report.
-
-        Your report should be thorough, detailed, and academic in nature - similar to a well-researched white paper or policy brief.
-
-        Structure your report with the following comprehensive sections:
-
-        1. Executive Summary
-        2. Introduction
-        3. Methodology
-        4. Detailed Findings (with subsections)
-        5. Analysis
-        6. Implications
-        7. Recommendations
-        8. Conclusion
-
-        Use proper Markdown formatting with headers, bullet points, and emphasis. Make the report detailed and substantive, balancing factual reporting with insightful analysis.
-        """,
-        description="Creates a comprehensive, detailed research report based on all findings."
-    )
-
-# Create a synchronous wrapper for the search function to avoid issues with ADK parsing
-async def searxng_search(query: str) -> dict:
-    """
-    Search the web using SearXNG.
-    
-    Args:
-        query (str): The search query string
-        
-    Returns:
-        dict: A dictionary containing search results
-    """
-    try:
-        # Create a task for the search
-        search_task = asyncio.create_task(searxng_client.search_and_scrape(query, max_results=5))
-        
-        # Await the search task with a timeout
+def make_search_agent(query):
+    async def searxng_search(q: str) -> dict:
+        """Web search using SearXNG."""
         try:
-            result = await asyncio.wait_for(search_task, timeout=30)
-            return result
-        except asyncio.TimeoutError:
-            print(f"Search timeout for query: {query}")
-            return {"error": f"Search timeout for query: {query}", "query": query}
-    except Exception as e:
-        print(f"Search error: {str(e)}")
-        return {"error": str(e), "query": query}
-
-# Agent 1: Query Generation Agent
-query_generation_agent = LlmAgent(
-    name="QueryGenerationAgent",
-    model=GEMINI_MODEL,
-    instruction="""You are an AI Query Generation Assistant.
-    
-    Your task is to decide WHAT to search for next based on the current research goal.
-    Generate a list of specific Search Engine Results Page (SERP) queries.
-    
-    For each query, define a researchGoal that outlines what you expect to find and potential next steps.
-    
-    Output a JSON object with the following structure:
-    {
-        "queries": [
-            {
-                "query": "specific search term 1",
-                "researchGoal": "what I expect to find with this query and how it relates to the overall research"
-            },
-            {
-                "query": "specific search term 2",
-                "researchGoal": "what I expect to find with this query and how it relates to the overall research"
-            }
-        ]
-    }
-    
-    Adapt your queries based on any accumulated knowledge from previous searches.
-    """,
-    description="Generates search queries based on research goals and previous learnings."
-)
-
-# Agent 2: Search and Process Agent Template
-# Remove the FunctionTool creation entirely
-# Make sure your searxng_search function has a proper docstring as shown in the example
-
-# And then in your search agent creation function:
-def create_search_agent(query, index):
-    """Creates a search agent for a specific query"""
+            return await asyncio.wait_for(searxng_client.search_and_scrape(q, max_results=5), timeout=30)
+        except Exception as e:
+            return {"error": str(e), "query": q}
     return LlmAgent(
-        name=f"SearchAndProcessAgent_{index}",
+        name=f"Search_{uuid.uuid4().hex[:8]}",
         model=GEMINI_MODEL,
-        instruction=f"""You are an AI Search and Process Assistant.
-        
-        Search Query: "{query}"
-        
-        Your task is to:
-        1. Use the SearXNG Search tool to search for the assigned query
-        2. Process the search results, including the scraped content from each page
-        3. Extract valuable information from the search results
-        4. Organize the learnings in a structured way
-        
-        Output a JSON object with the following structure:
-        {{
-            "learnings": [
-                "Concise fact or insight 1",
-                "Concise fact or insight 2",
-                "Concise fact or insight 3"
-            ],
-            "follow_up_questions": [
-                "Specific question for further research 1",
-                "Specific question for further research 2"
-            ]
-        }}
-        
-        For learnings, provide detailed, information-rich insights rather than general observations.
-        Include specific data points, statistics, expert opinions, and factual findings whenever possible.
-        
-        Focus on extracting factual information most relevant to the research goal.
-        """,
-        description=f"Searches and processes results for: {query}",
-        tools=[searxng_search]  # Pass the function directly here
+        instruction=f"""
+You are an expert research analyst. You have been assigned the following research query:
+"{query}"
+
+Your task:
+- Carefully review the search results and their content.
+- Extract not only key facts, but also analysis, competing perspectives, implications, and any controversies or debates.
+- Identify trends, causal relationships, and broader context.
+- **Highlight any data, statistics, numbers, percentages, dates, or quantitative evidence.**
+- For each learning, if possible, include the relevant number or statistic and its context.
+- Note any gaps, uncertainties, or areas needing further research.
+
+Return a JSON object:
+{{
+  "learnings": [
+    "Analytical insight, fact, or perspective 1 (with data: e.g. 'GDP fell by 2% in 2020')",
+    "Analytical insight, fact, or perspective 2 (with data)",
+    "Implication, controversy, or trend 3"
+  ],
+  "source_urls": [
+    "https://source1.com",
+    "https://source2.com"
+  ]
+}}
+""",
+        description=f"Analytical search and synthesis for: {query}",
+        tools=[searxng_search]
     )
 
-# Agent 3: Report Generator Agent
-report_generator_agent = LlmAgent(
-    name="ReportGeneratorAgent",
-    model=GEMINI_MODEL,
-    instruction="""You are an AI Report Generation Assistant tasked with creating an in-depth, comprehensive research report.
-    
-    Your report should be thorough, detailed, and academic in nature - similar to a well-researched white paper or policy brief.
-    
-    Structure your report with the following comprehensive sections:
-    
-    1. Executive Summary
-       - A detailed overview of key findings (1-2 paragraphs)
-       - The most significant implications identified in your research
-    
-    2. Introduction
-       - Background context on the research topic
-       - The significance and relevance of this topic
-       - Scope of the analysis
-    
-    3. Methodology
-       - Brief explanation of how information was gathered and synthesized
-    
-    4. Detailed Findings (organize into relevant subsections)
-       - Economic impacts (with data points whenever available)
-       - Policy implications
-       - Industry-specific effects
-       - Consumer impacts
-       - International relations aspects
-       - Short-term vs. long-term effects
-    
-    5. Analysis
-       - Critical examination of competing perspectives
-       - Evaluation of the evidence
-       - Identification of knowledge gaps or limitations
-    
-    6. Implications
-       - Broader economic, political, and social consequences
-       - Potential future scenarios
-    
-    7. Recommendations
-       - Policy suggestions based on the evidence
-       - Areas requiring further research
-    
-    8. Conclusion
-       - Synthesis of key insights
-       - Final assessment of the research question
-    
-    Use proper Markdown formatting with:
-    - Main sections as # headers
-    - Subsections as ## and ### headers
-    - Bullet points for lists
-    - *Italics* and **bold** for emphasis on key points
-    - Block quotes for important citations or observations
-    
-    Make the report detailed and substantive - aim for a comprehensive analysis that would satisfy an expert audience.
-    
-    Balance factual reporting with insightful analysis. Connect individual data points into broader patterns and narratives.
-    Use an academic, professional tone while ensuring the content remains accessible.
-    """,
-    description="Creates a comprehensive, detailed research report based on all findings."
-)
+def make_report_agent():
+    return LlmAgent(
+        name=f"ReportGen_{uuid.uuid4().hex[:8]}",
+        model=GEMINI_MODEL,
+        instruction="""
+You are an expert research report writer. Given a research goal, a set of analytical findings, and a list of source URLs, write a comprehensive, academic-style research report.
 
-def run_and_collect_final_response(runner, user_id, session_id, new_message):
-    """
-    Runs the runner and collects the first final response from the event generator.
-    This function is meant to be run in a thread using asyncio.to_thread.
-    """
-    result_text = None
-    events = runner.run(
-        user_id=user_id,
-        session_id=session_id,
-        new_message=new_message
+Your report must include the following sections:
+1. Executive Summary (1-2 paragraphs summarizing the most important findings and implications)
+2. Introduction (background, context, and significance of the research topic)
+3. Methodology (how the research was conducted, sources used, and any limitations)
+4. Detailed Findings (organized by theme or perspective, with data, analysis, and multiple viewpoints; **emphasize all numerical/statistical evidence**)
+5. Analysis (synthesize findings, discuss trends, controversies, and causal relationships)
+6. Implications (broader impact, policy or practical implications, future outlook)
+7. Recommendations (actionable suggestions or further research directions)
+8. Conclusion (summarize key insights and final thoughts)
+9. Sources (list all URLs or references used, one per line)
+
+- Use clear Markdown formatting with headings, bullet points, and block quotes for key evidence.
+- **Explicitly include and highlight all numbers, statistics, percentages, and quantitative evidence found.**
+- Make the report suitable for an expert or academic audience.
+""",
+        description="Writes a detailed, analytical research report with sources and data."
     )
-    for event in events:
-        if event.is_final_response():
-            result_text = event.content.parts[0].text
-            break
-    return result_text
 
-# --- Main execution function ---
-async def run_parallel_research(research_goal, context=""):
-    """
-    Main function to execute the parallel research process
-    
-    Args:
-        research_goal: The research question or goal
-        context: Optional conversation context to include
-    
-    Returns:
-        Comprehensive research report
-    """
-    session_service = InMemorySessionService()
-    session = session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
-    
-    # Initialize state
-    all_learnings = []
-    query_research_goals = {}
-    
-    # Add context to the research goal if provided
-    if context:
-        research_prompt = f"""
-{context}
-
-Current date: {datetime.now().strftime('%Y-%m-%d')}
-Current time: {datetime.now().strftime('%H:%M:%S')}
-
-Research Goal: {research_goal}
-
-Please conduct research based on this goal, taking into account any relevant context.
-"""
-    else:
-        research_prompt = f"Research Goal: {research_goal}\n\nGenerate search queries to help research this topic thoroughly."
-
-    # Step 1: Generate initial queries
-    initial_content = types.Content(
-        role='user', 
-        parts=[types.Part(text=research_prompt)]
-    )
-    # Create initial ParallelAgent with a fresh query generator agent
-    parallel_agent = ParallelAgent(
-        name="ParallelWebResearchAgent",
-        sub_agents=[create_query_generation_agent()]
-    )
-    
-    runner = Runner(agent=parallel_agent, app_name=APP_NAME, session_service=session_service)
-    
-    # Run query generation and capture response (non-blocking)
-    query_generation_response = await asyncio.to_thread(
-        run_and_collect_final_response,
-        runner,
-        USER_ID,
-        SESSION_ID,
-        initial_content
-    )
-    print("Query Generator Response:", query_generation_response)
-    
-    # Extract generated queries from response
-    queries = []
+def extract_json(text, key="queries"):
+    # Extract JSON with the specified key from text
     try:
-        # Try to find JSON in the response - more robust pattern matching
-        json_match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', query_generation_response)
-        if json_match:
-            # Use the first non-None group
-            json_str = next(group for group in json_match.groups() if group is not None)
-            
-            # Try to parse the JSON
-            try:
-                query_result = json.loads(json_str)
-                if "queries" in query_result and isinstance(query_result["queries"], list):
-                    queries = query_result["queries"]
-                    
-                    # Store research goals for each query
-                    for query_item in queries:
-                        if isinstance(query_item, dict) and "query" in query_item and "researchGoal" in query_item:
-                            query_research_goals[query_item["query"]] = query_item["researchGoal"]
-                else:
-                    print("JSON found but 'queries' key missing or not a list")
-            except json.JSONDecodeError as e:
-                print(f"Invalid JSON found: {e}")
-                print(f"JSON string: {json_str[:100]}...")
-        else:
-            print("No JSON pattern found in response")
-    except Exception as e:
-        print(f"Error extracting queries: {e}")
-    
-    # Fallback if no queries were extracted
+        match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', text)
+        if match:
+            json_str = next(g for g in match.groups() if g)
+            obj = json.loads(json_str)
+            if key in obj:
+                return obj[key]
+        # fallback: try to parse any JSON
+        obj = json.loads(text)
+        if key in obj:
+            return obj[key]
+    except Exception:
+        pass
+    return []
+
+def extract_learnings_and_urls(text):
+    try:
+        match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', text)
+        if match:
+            json_str = next(g for g in match.groups() if g)
+            obj = json.loads(json_str)
+            learnings = obj.get("learnings", [])
+            urls = obj.get("source_urls", [])
+            return learnings, urls
+        obj = json.loads(text)
+        learnings = obj.get("learnings", [])
+        urls = obj.get("source_urls", [])
+        return learnings, urls
+    except Exception:
+        return [text[:300]], []
+
+async def run_parallel_research(research_goal, context="", on_progress=None):
+    session_id = str(uuid.uuid4())
+    session_service = InMemorySessionService()
+    session = session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
+
+    # 1. Generate queries
+    prompt = f"{context}\n\nResearch Goal: {research_goal}\nGenerate search queries."
+    query_agent = make_query_agent()
+    runner = Runner(agent=query_agent, app_name=APP_NAME, session_service=session_service)
+    content = types.Content(role='user', parts=[types.Part(text=prompt)])
+    query_response = await asyncio.to_thread(
+        lambda: next(
+            e.content.parts[0].text
+            for e in runner.run(
+                user_id=USER_ID,
+                session_id=session_id,
+                new_message=content
+            )
+            if e.is_final_response()
+        )
+    )
+    queries = extract_json(query_response, key="queries")
     if not queries:
-        print("Using fallback queries")
-        queries = [
-            {"query": f"{research_goal} overview"},
-            {"query": f"{research_goal} analysis"},
-            {"query": f"{research_goal} impact"}
+        queries = [research_goal]
+    # Limit to 2 queries to avoid quota exhaustion
+    queries = queries[:2]
+
+    progress = {
+        "currentDepth": 1,
+        "totalDepth": 1,
+        "currentBreadth": len(queries),
+        "totalBreadth": len(queries),
+        "currentQuery": "",
+        "totalQueries": len(queries),
+        "completedQueries": 0,
+    }
+    if on_progress:
+        await maybe_await(on_progress(progress))
+
+    # 2. Parallel search
+    search_agents = [make_search_agent(q) for q in queries]
+    parallel_agent = ParallelAgent(name=f"Parallel_{uuid.uuid4().hex[:8]}", sub_agents=search_agents)
+    search_runner = Runner(agent=parallel_agent, app_name=APP_NAME, session_service=session_service)
+    search_content = types.Content(role='user', parts=[types.Part(text="Do your assigned search and summarize findings.")])
+    search_results = await asyncio.to_thread(
+        lambda: [
+            e.content.parts[0].text
+            for e in search_runner.run(
+                user_id=USER_ID,
+                session_id=session_id,
+                new_message=search_content
+            )
+            if e.is_final_response()
         ]
+    )
+
+    # Progress update after search
+    progress["completedQueries"] = len(queries)
+    if on_progress:
+        await maybe_await(on_progress(progress))
+
+    # 3. Collect learnings and source URLs (only from successfully scraped content)
+    all_learnings = []
+    all_urls = set()  # Use set to automatically handle duplicates
     
-    # Step 2: For each query, create a specific search agent instance and execute
-    search_results_by_query = {}
-    for i, query_item in enumerate(queries):
-        query = query_item.get("query") if isinstance(query_item, dict) else query_item
+    for result_text in search_results:
+        # Extract learnings and URLs from the agent's response
+        learnings, potential_urls = extract_learnings_and_urls(result_text)
+        all_learnings.extend(learnings)
 
-        # Create specific search agent for this query
-        search_agent = create_search_agent(query, i)
+        # Check if the result text contains scraped content info
+        try:
+            result_data = json.loads(result_text)
+            if isinstance(result_data, dict):
+                # Extract URLs from scraped content
+                if "organic" in result_data:
+                    for item in result_data["organic"]:
+                        if isinstance(item, dict):
+                            scraped = item.get("scraped_content", {})
+                            if scraped.get("success", False) and scraped.get("url"):
+                                all_urls.add(scraped["url"])
+        except json.JSONDecodeError:
+            pass
 
-        # Create new ParallelAgent with just this search agent
-        search_parallel_agent = ParallelAgent(
-            name="SingleSearchAgent",
-            sub_agents=[search_agent]
-        )
-
-        search_runner = Runner(
-            agent=search_parallel_agent, 
-            app_name=APP_NAME, 
-            session_service=session_service
-        )
-        
-        # Run the search (make this non-blocking)
-        search_content = types.Content(
-            role='user', 
-            parts=[types.Part(text=f"Search for: {query} related to the research goal: {research_goal}")]
-        )
-
-        # Run the search and collect the result in a thread
-        search_result_text = await asyncio.to_thread(
-            run_and_collect_final_response,
-            search_runner,
-            USER_ID,
-            SESSION_ID,
-            search_content
-        )
-        
-        if search_result_text:
-            print(f"Search Agent {i} Response:", search_result_text[:100] + "..." if len(search_result_text) > 100 else search_result_text)
-
-        # Extract learnings from the search response with more robust handling
-        if search_result_text:
+        # Also add any URLs from the agent's response that were successfully scraped
+        for url in potential_urls:
             try:
-                # Try to find JSON in the response
-                json_match = re.search(r'```json\s*({[\s\S]*?})\s*```|({[\s\S]*})', search_result_text)
-                if json_match:
-                    # Use the first non-None group
-                    json_str = next(group for group in json_match.groups() if group is not None)
-                    
-                    try:
-                        search_result = json.loads(json_str)
-                        if "learnings" in search_result and isinstance(search_result["learnings"], list):
-                            # Store the learnings by query for better organization
-                            search_results_by_query[query] = search_result["learnings"]
-                            all_learnings.extend(search_result["learnings"])
-                        else:
-                            # Create a default learning if none found
-                            learning = f"From search '{query}': Found information but no structured learnings."
-                            search_results_by_query[query] = [learning]
-                            all_learnings.append(learning)
-                    except json.JSONDecodeError as e:
-                        print(f"Invalid JSON in search result: {e}")
-                        # Use text as backup
-                        learning = f"From search '{query}': {search_result_text[:300]}..."
-                        search_results_by_query[query] = [learning]
-                        all_learnings.append(learning)
-                else:
-                    # If no JSON found, extract text as is
-                    learning = f"From search '{query}': {search_result_text[:300]}..."
-                    search_results_by_query[query] = [learning]
-                    all_learnings.append(learning)
-            except Exception as e:
-                print(f"Error extracting learnings from search {i}: {e}")
-                # Add the raw text as a fallback
-                if search_result_text:
-                    learning = f"From search '{query}': {search_result_text[:300]}..."
-                    search_results_by_query[query] = [learning]
-                    all_learnings.append(learning)
-        else:
-            print(f"No result text for search {i}")
-            learning = f"From search '{query}': No results obtained."
-            search_results_by_query[query] = [learning]
-            all_learnings.append(learning)
-    
-    # Step 3: Generate final report
-    # Build a structured report input with organized learnings by topic/query
-    report_input = f"""
-# Research Report Input: {research_goal}
+                result_data = json.loads(result_text)
+                if isinstance(result_data, dict) and "organic" in result_data:
+                    for item in result_data["organic"]:
+                        if isinstance(item, dict):
+                            scraped = item.get("scraped_content", {})
+                            if (scraped.get("success", False) and 
+                                scraped.get("url") == url):
+                                all_urls.add(url)
+            except json.JSONDecodeError:
+                pass
 
-## Research Questions and Findings
+    # Convert set back to sorted list
+    all_urls = sorted(u for u in all_urls if u)
 
-"""
-    
-    # Add each query and its findings in an organized way
-    for query, learnings in search_results_by_query.items():
-        research_goal_text = query_research_goals.get(query, "")
-        report_input += f"### Query: {query}\n"
-        if research_goal_text:
-            report_input += f"**Research Goal**: {research_goal_text}\n\n"
-        report_input += "**Findings**:\n"
-        for learning in learnings:
-            report_input += f"- {learning}\n"
-        report_input += "\n"
-    
-    # Add context to the final report generation if provided
-    if context:
-        final_prompt = f"""
-{context}
-
-Create a comprehensive, detailed research report on the following topic:
-
-RESEARCH GOAL: {research_goal}
-
-The report should be thorough, academic in style, and cover all relevant aspects of this topic.
-Please synthesize the following research findings into a cohesive, well-structured report while considering the context provided:
-
-{report_input}
-
-Your report should be substantial and comprehensive, covering the topic from multiple angles.
-Balance factual reporting with insightful analysis and provide a nuanced perspective on the topic.
-"""
-    else:
-        final_prompt = f"""
-Create a comprehensive, detailed research report on the following topic:
-
-RESEARCH GOAL: {research_goal}
-
-The report should be thorough, academic in style, and cover all relevant aspects of this topic.
-Please synthesize the following research findings into a cohesive, well-structured report:
-
-{report_input}
-
-Your report should be substantial and comprehensive, covering the topic from multiple angles.
-Balance factual reporting with insightful analysis and provide a nuanced perspective on the topic.
-"""
-    
-    final_content = types.Content(
-        role='user', 
-        parts=[types.Part(text=final_prompt)]
+    # 4. Synthesize report (pass URLs as well)
+    report_input = (
+        f"Research Goal: {research_goal}\n\n"
+        f"Findings:\n" + "\n".join(f"- {l}" for l in all_learnings)
     )
-    
-    final_parallel_agent = ParallelAgent(
-        name="FinalReportAgent",
-        sub_agents=[create_report_generator_agent()]
+    report_agent = make_report_agent()
+    report_runner = Runner(agent=report_agent, app_name=APP_NAME, session_service=session_service)
+    report_content = types.Content(role='user', parts=[types.Part(text=report_input)])
+    report = await asyncio.to_thread(
+        lambda: next(
+            e.content.parts[0].text
+            for e in report_runner.run(
+                user_id=USER_ID,
+                session_id=session_id,
+                new_message=report_content
+            )
+            if e.is_final_response()
+        )
     )
-   
-    final_runner = Runner(
-        agent=final_parallel_agent, 
-        app_name=APP_NAME, 
-        session_service=session_service
-    )
-    
-    # Run the final report generation and collect the result in a thread
-    final_report = await asyncio.to_thread(
-        run_and_collect_final_response,
-        final_runner,
-        USER_ID,
-        SESSION_ID,
-        final_content
-    )
+    # Always append sources as Markdown list at the end
+    if all_urls:
+        report += "\n\n## Sources\n" + "\n".join(f"- {url}" for url in all_urls)
+    return report
 
-    if final_report:
-        print("Report Generator Response Length:", len(final_report))
-    else:
-        print("No final report generated.")
- 
-    return final_report
+# Utility to support both sync and async progress callbacks
+async def maybe_await(result):
+    if asyncio.iscoroutine(result):
+        await result
 
-# Example usage - updated to handle async
+# Stubs for compatibility
+async def deep_research_agent(*args, **kwargs):
+    return {"learnings": [], "visited_urls": [], "error": "deep_research_agent not implemented"}
+
+async def write_final_report(*args, **kwargs):
+    return "Final report generation is not implemented."
+
 if __name__ == "__main__":
-    import asyncio
-    
     async def main():
-        research_goal = "Impact of tariffs on China led by Trump, also explain about the current tariff rates"
-        final_report = await run_parallel_research(research_goal)
-        print("\nFINAL RESEARCH REPORT:")
-        print(final_report)
-    
+        report = await run_parallel_research("Impact of tariffs on China led by Trump, also explain about the current tariff rates")
+        print(report)
     asyncio.run(main())

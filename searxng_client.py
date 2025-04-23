@@ -7,6 +7,7 @@ import os
 import ssl
 import random
 import time
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,7 +40,8 @@ class SearXNGClient:
         self.fallback_engines = [
             "duckduckgo", "bing", "brave", "ecosia", "startpage", 
             "yahoo", "qwant", "mojeek", "wikipedia"
-        ]
+        ]    
+        self.default_engines = ["google", "bing", "duckduckgo", "brave", "yahoo", "wikipedia"]
     
     async def search(self, query: str, num_results: int = 10, engines: List[str] = None) -> Dict[str, Any]:
         """
@@ -53,19 +55,18 @@ class SearXNGClient:
         Returns:
             Dictionary containing search results in a format similar to Serper
         """
+        if engines is None:
+            engines = self.default_engines
         params = {
             "q": query,
             "format": "json",
             "categories": "general",
             "language": "en",
             "time_range": "",
-            "safesearch": 1,
-            "pageno": 1
+            "safesearch": 1,  # Always use strict safe search
+            "pageno": 1,
+            "engines": ",".join(engines)
         }
-        
-        # Add engines parameter if specified
-        if engines:
-            params["engines"] = ",".join(engines)
         
         try:
             logger.info(f"Sending search request to {self.search_endpoint} with query: {query}")
@@ -138,17 +139,40 @@ class SearXNGClient:
             }
         }
     
+    def _is_valid_url(self, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            # Only allow https and reputable TLDs
+            if not parsed.scheme.startswith("http"):
+                return False
+            # Filter out suspicious TLDs and short/weird domains
+            bad_tlds = {
+                ".gq", ".cf", ".ml", ".tk", ".xyz", ".ga", ".br", ".vi", ".ye", ".hn", ".qa", ".sr", ".hm", ".ss"
+            }
+            # Block short/obscure domains (e.g., 2-3 letter domains)
+            domain = parsed.netloc.split(":")[0]
+            if len(domain.split(".")) >= 2:
+                sld = domain.split(".")[-2]
+                if len(sld) <= 3:
+                    return False
+            if any(parsed.netloc.endswith(tld) for tld in bad_tlds):
+                return False
+            # Require https for extra safety
+            if parsed.scheme != "https":
+                return False
+            return True
+        except Exception:
+            return False
+
     async def scrape_url(self, url: str) -> Dict[str, str]:
         try:
             logger.info(f"Scraping URL: {url}")
-            
             # Configure newspaper to not verify SSL certificates
             config = {}
             if not self.verify_ssl:
                 config = {'verify': False}
             
             article = Article(url)
-            
             # Use more robust error handling during download and parse
             try:
                 await asyncio.to_thread(article.download)
@@ -176,7 +200,7 @@ class SearXNGClient:
                 "error": str(e),
                 "success": False
             }
-    
+
     async def search_and_scrape(self, query: str, max_results: int = 30) -> Dict[str, Any]:
         """
         Search and scrape results in parallel.
@@ -204,10 +228,10 @@ class SearXNGClient:
             return search_results
         
         # Extract URLs to scrape
-        urls_to_scrape = [result["link"] for result in search_results.get("organic", [])]
+        urls_to_scrape = [result["link"] for result in search_results.get("organic", []) if self._is_valid_url(result["link"])]
         
         if not urls_to_scrape:
-            logger.warning("No URLs found to scrape")
+            logger.warning("No valid URLs found to scrape")
             return search_results
             
         logger.info(f"Scraping {len(urls_to_scrape)} URLs")
@@ -218,7 +242,7 @@ class SearXNGClient:
             # Add a small random delay between scrapes to avoid overwhelming the network
             await asyncio.sleep(random.uniform(0.1, 0.5))
             scrape_tasks.append(self.scrape_url(url))
-            
+        
         # Use gather with return_exceptions=True to prevent one failure from stopping all scrapes
         scraped_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
         
@@ -237,7 +261,6 @@ class SearXNGClient:
         
         return search_results
 
-
 async def test_searxng_client():
     """Test function for SearXNG client."""
     # Use environment variable or default to localhost
@@ -251,7 +274,6 @@ async def test_searxng_client():
         # Test with specific engines that are less likely to be rate limited
         test_query = "current US tariffs on China 2025"
         logger.info(f"Testing with query: {test_query}")
-        
         # Try first with DuckDuckGo specifically (usually more reliable)
         results = await client.search(test_query, engines=["duckduckgo"])
         
@@ -260,7 +282,7 @@ async def test_searxng_client():
             results = await client.search_and_scrape(test_query)
         else:
             # If search succeeded, also scrape the content
-            urls_to_scrape = [result["link"] for result in results.get("organic", [])]
+            urls_to_scrape = [result["link"] for result in results.get("organic", []) if client._is_valid_url(result["link"])]
             scrape_tasks = [client.scrape_url(url) for url in urls_to_scrape]
             scraped_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
             
@@ -278,9 +300,8 @@ async def test_searxng_client():
         if "error" in results:
             logger.error(f"Search error: {results['error']}")
             return results
-            
-        logger.info(f"Found {len(results.get('organic', []))} results")
         
+        logger.info(f"Found {len(results.get('organic', []))} results")
         for i, result in enumerate(results.get("organic", [])):
             print(f"Result {i+1}: {result['title']} (source: {result.get('source', 'unknown')})")
             scraped = result.get("scraped_content", {})
@@ -288,7 +309,6 @@ async def test_searxng_client():
                 print(f"  Scraped {len(scraped.get('text', '').split())} words")
             else:
                 print(f"  Scraping failed: {scraped.get('error')}")
-        return results
     except Exception as e:
         logger.error(f"Test failed with exception: {str(e)}")
         return {"error": str(e)}
